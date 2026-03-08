@@ -57,6 +57,8 @@ async function loadCalls() {
         <td>${r.fromNumber || ''}</td>
         <td>${r.toNumber || ''}</td>
         <td><span class="status-pill ${r.status === 'placed' ? 'ok' : 'err'}">${r.status}</span></td>
+        <td>${r.durationSec ?? ''}</td>
+        <td>${r.amdStatus ?? ''}</td>
         <td>${r.jobId || r.error || ''}</td>
       `;
       tbody.appendChild(tr);

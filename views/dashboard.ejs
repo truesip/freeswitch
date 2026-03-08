@@ -45,6 +45,8 @@
                     <th>From</th>
                     <th>To</th>
                     <th>Status</th>
+                    <th>Duration</th>
+                    <th>AMD</th>
                     <th>Job ID / Error</th>
                   </tr>
                 </thead>
@@ -74,6 +76,10 @@
               <div class="form-row">
                 <label>Dial Prefix</label>
                 <input name="dialPrefix" required placeholder="sofia/gateway/public/" />
+              </div>
+              <div class="form-row">
+                <label>Webhook URL (optional)</label>
+                <input name="webhookUrl" placeholder="https://example.com/webhook" />
               </div>
               <button type="submit">Save & Reconnect</button>
               <div id="server-msg" class="form-msg"></div>
