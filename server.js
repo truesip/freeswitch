@@ -31,6 +31,9 @@ const runtimeConfig = {
   webhookUrl: process.env.WEBHOOK_URL || '',
   port: Number(process.env.PORT || 8080)
 };
+if (!process.env.FS_ESL_HOST) {
+  console.warn('Warning: FS_ESL_HOST not set; defaulting to 127.0.0.1:8021 (likely to fail in production).');
+}
 
 // MySQL pool
 const dbConfigFromUrl = () => {
@@ -114,7 +117,7 @@ if (dbConfig && dbConfig.host) {
     clearExpired: true,
     checkExpirationInterval: 1000 * 60 * 10,
     expiration: 1000 * 60 * 60 * 8,
-    createDatabaseTable: false
+    createDatabaseTable: true
   };
   sessionStore = new MySQLStore(storeOptions);
   sessionOpts.store = sessionStore;
