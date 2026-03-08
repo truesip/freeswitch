@@ -8,6 +8,7 @@ const modEsl = require('modesl');
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 
 // Load env (standard .env, then fallback to the provided sample filename)
 dotenv.config();
@@ -21,14 +22,32 @@ app.set('views', path.join(__dirname, 'views'));
 app.disable('x-powered-by');
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.json());
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || 'esl-admin-secret',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 8 } // 8 hours
-  })
-);
+
+let sessionStore = null;
+const sessionOpts = {
+  secret: process.env.SESSION_SECRET || 'esl-admin-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 1000 * 60 * 60 * 8 } // 8 hours
+};
+if (process.env.DATABASE_URL || process.env.DB_HOST) {
+  const storeOptions = {
+    host: dbConfig?.host,
+    port: dbConfig?.port || 3306,
+    user: dbConfig?.user,
+    password: dbConfig?.password,
+    database: dbConfig?.database,
+    clearExpired: true,
+    checkExpirationInterval: 1000 * 60 * 10,
+    expiration: 1000 * 60 * 60 * 8,
+    createDatabaseTable: false
+  };
+  sessionStore = new MySQLStore(storeOptions);
+  sessionOpts.store = sessionStore;
+} else {
+  console.warn('Warning: using in-memory session store; set DB env for production.');
+}
+app.use(session(sessionOpts));
 
 const runtimeConfig = {
   fsHost: process.env.FS_ESL_HOST || '127.0.0.1',
@@ -87,12 +106,12 @@ async function initDb() {
     INDEX idx_created_at (created_at)
   )`);
   const alters = [
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS ring_time DATETIME NULL",
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS answer_time DATETIME NULL",
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS hangup_time DATETIME NULL",
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS duration_sec INT NULL",
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS amd_status VARCHAR(64) NULL",
-    "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS webhook_url TEXT"
+    "ALTER TABLE call_logs ADD COLUMN ring_time DATETIME NULL",
+    "ALTER TABLE call_logs ADD COLUMN answer_time DATETIME NULL",
+    "ALTER TABLE call_logs ADD COLUMN hangup_time DATETIME NULL",
+    "ALTER TABLE call_logs ADD COLUMN duration_sec INT NULL",
+    "ALTER TABLE call_logs ADD COLUMN amd_status VARCHAR(64) NULL",
+    "ALTER TABLE call_logs ADD COLUMN webhook_url TEXT"
   ];
   for (const sql of alters) {
     try {
