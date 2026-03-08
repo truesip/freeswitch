@@ -1,0 +1,22 @@
+{
+  "name": "fs-esl-outbound",
+  "version": "1.0.0",
+  "description": "FreeSWITCH ESL outbound dialer for DigitalOcean App Platform",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "modesl": "^1.2.1",
+    "express-session": "^1.18.0",
+    "mysql2": "^3.9.7"
+  }
+}

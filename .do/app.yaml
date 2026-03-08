@@ -1,0 +1,15 @@
+name: fs-esl-outbound
+services:
+  - name: api
+    http_port: 8080
+    dockerfile_path: ./Dockerfile
+    envs:
+      - key: FS_ESL_HOST
+        value: your-freeswitch-ip
+      - key: FS_ESL_PORT
+        value: "8021"
+      - key: FS_ESL_PASSWORD
+        value: ClueCon
+        type: SECRET
+      - key: FS_DIAL_PREFIX
+        value: sofia/gateway/public/

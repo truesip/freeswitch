@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login - ESL Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      .login-box {
+        background: #0b1220;
+        padding: 24px 22px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        width: 320px;
+      }
+      .login-box h1 {
+        margin: 0 0 12px 0;
+      }
+      .error {
+        color: #f97316;
+        font-size: 13px;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-box">
+      <h1>ESL Admin</h1>
+      <form method="post" action="/login">
+        <div class="form-row">
+          <label>Username</label>
+          <input name="username" required />
+        </div>
+        <div class="form-row">
+          <label>Password</label>
+          <input type="password" name="password" required />
+        </div>
+        <button type="submit">Login</button>
+        <% if (error) { %><div class="error"><%= error %></div><% } %>
+      </form>
+    </div>
+  </body>
+</html>

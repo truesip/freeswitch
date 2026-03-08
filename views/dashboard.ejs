@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESL Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="logo">ESL Admin</div>
+        <nav>
+          <button data-target="overview" class="active">Overview</button>
+          <button data-target="history">Call History</button>
+          <button data-target="server">Server</button>
+        </nav>
+      </aside>
+      <main>
+        <section id="overview" class="view active">
+          <h1>Overview</h1>
+          <div class="cards">
+            <div class="card"><div class="label">Total Calls</div><div class="value" id="stat-total">-</div></div>
+            <div class="card"><div class="label">Placed</div><div class="value" id="stat-placed">-</div></div>
+            <div class="card"><div class="label">Failed</div><div class="value" id="stat-failed">-</div></div>
+            <div class="card"><div class="label">Today</div><div class="value" id="stat-today">-</div></div>
+            <div class="card"><div class="label">Concurrent (last 2m)</div><div class="value" id="stat-concurrent">-</div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">Calls - Last 7 Days</div>
+            <canvas id="chart-calls" height="120"></canvas>
+          </div>
+        </section>
+
+        <section id="history" class="view">
+          <h1>Call History</h1>
+          <div class="panel">
+            <div class="panel-header">Recent Calls</div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Status</th>
+                    <th>Job ID / Error</th>
+                  </tr>
+                </thead>
+                <tbody id="calls-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="server" class="view">
+          <h1>Server Settings</h1>
+          <div class="panel">
+            <div class="panel-header">FreeSWITCH Connection</div>
+            <form id="server-form">
+              <div class="form-row">
+                <label>FS Host</label>
+                <input name="fsHost" required placeholder="127.0.0.1" />
+              </div>
+              <div class="form-row">
+                <label>FS Port</label>
+                <input name="fsPort" type="number" required value="8021" />
+              </div>
+              <div class="form-row">
+                <label>FS Password</label>
+                <input name="fsPassword" type="password" required placeholder="ClueCon" />
+              </div>
+              <div class="form-row">
+                <label>Dial Prefix</label>
+                <input name="dialPrefix" required placeholder="sofia/gateway/public/" />
+              </div>
+              <button type="submit">Save & Reconnect</button>
+              <div id="server-msg" class="form-msg"></div>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+ </html>
