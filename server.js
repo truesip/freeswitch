@@ -23,32 +23,6 @@ app.disable('x-powered-by');
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.json());
 
-let sessionStore = null;
-const sessionOpts = {
-  secret: process.env.SESSION_SECRET || 'esl-admin-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 8 } // 8 hours
-};
-if (process.env.DATABASE_URL || process.env.DB_HOST) {
-  const storeOptions = {
-    host: dbConfig?.host,
-    port: dbConfig?.port || 3306,
-    user: dbConfig?.user,
-    password: dbConfig?.password,
-    database: dbConfig?.database,
-    clearExpired: true,
-    checkExpirationInterval: 1000 * 60 * 10,
-    expiration: 1000 * 60 * 60 * 8,
-    createDatabaseTable: false
-  };
-  sessionStore = new MySQLStore(storeOptions);
-  sessionOpts.store = sessionStore;
-} else {
-  console.warn('Warning: using in-memory session store; set DB env for production.');
-}
-app.use(session(sessionOpts));
-
 const runtimeConfig = {
   fsHost: process.env.FS_ESL_HOST || '127.0.0.1',
   fsPort: Number(process.env.FS_ESL_PORT || 8021),
@@ -122,6 +96,32 @@ async function initDb() {
   }
 }
 
+// Session store (must come after dbConfig definition)
+let sessionStore = null;
+const sessionOpts = {
+  secret: process.env.SESSION_SECRET || 'esl-admin-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 1000 * 60 * 60 * 8 } // 8 hours
+};
+if (dbConfig && dbConfig.host) {
+  const storeOptions = {
+    host: dbConfig.host,
+    port: dbConfig.port || 3306,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    database: dbConfig.database,
+    clearExpired: true,
+    checkExpirationInterval: 1000 * 60 * 10,
+    expiration: 1000 * 60 * 60 * 8,
+    createDatabaseTable: false
+  };
+  sessionStore = new MySQLStore(storeOptions);
+  sessionOpts.store = sessionStore;
+} else {
+  console.warn('Warning: using in-memory session store; set DB env for production.');
+}
+app.use(session(sessionOpts));
 let eslConn;
 let eslReady = false;
 function closeEsl() {
