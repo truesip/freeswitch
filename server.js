@@ -304,19 +304,19 @@ const parseCookies = (req) => {
 };
 
 const isAuthed = (req) => {
-  if (req.session?.auth) return true;
   const headerKey = req.headers['x-api-key'];
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   const queryKey = req.query.apiKey || req.query.api_key;
   const cookies = parseCookies(req);
   const cookieKey = cookies.apiKey;
-  if (
+  const hasApiKey =
     runtimeConfig.apiKey &&
-    (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey || cookieKey === runtimeConfig.apiKey)
-  ) {
-    return true;
+    (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey || cookieKey === runtimeConfig.apiKey);
+  const hasSession = !!req.session?.auth;
+  if (isApiRequest(req)) {
+    return hasSession || hasApiKey || (!runtimeConfig.apiKey && !process.env.ADMIN_USER); // allow open API only when no api key configured
   }
-  return !runtimeConfig.apiKey; // if no API key set, allow open access
+  return hasSession; // UI requires session login
 };
 const requireAuth = (req, res, next) => {
   if (isAuthed(req)) return next();
@@ -330,15 +330,11 @@ app.get('/login', (_req, res) => {
 });
 
 app.post('/login', bodyParser.urlencoded({ extended: false }), (req, res) => {
-  const { username, password, apiKey } = req.body || {};
+  const { username, password } = req.body || {};
   const u = process.env.ADMIN_USER || 'admin';
   const p = process.env.ADMIN_PASS || 'admin123';
   if (username && password && username === u && password === p) {
     req.session.auth = true;
-    return res.redirect('/admin');
-  }
-  if (runtimeConfig.apiKey && apiKey === runtimeConfig.apiKey) {
-    res.cookie('apiKey', apiKey, { httpOnly: false, sameSite: 'lax' });
     return res.redirect('/admin');
   }
   return res.status(401).render('login', { error: 'Invalid credentials', apiKeySet: !!runtimeConfig.apiKey });
