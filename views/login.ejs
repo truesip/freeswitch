@@ -34,15 +34,12 @@
       <h1>ESL Admin</h1>
       <form method="post" action="/login">
         <div class="form-row">
-          <label>Username</label>
-          <input name="username" required />
-        </div>
-        <div class="form-row">
-          <label>Password</label>
-          <input type="password" name="password" required />
+          <label>API Key</label>
+          <input name="apiKey" required placeholder="Enter API key" />
         </div>
         <button type="submit">Login</button>
         <% if (error) { %><div class="error"><%= error %></div><% } %>
+        <% if (!apiKeySet) { %><div class="error">Server API_KEY not set; all access is open.</div><% } %>
       </form>
     </div>
   </body>

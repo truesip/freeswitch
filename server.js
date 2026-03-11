@@ -263,11 +263,25 @@ async function uploadRecordingToAsterisk(recordingName, file) {
 }
 // Views
 const isApiRequest = (req) => req.path.startsWith('/api') || req.path === '/call';
+const parseCookies = (req) => {
+  const raw = req.headers.cookie || '';
+  return raw.split(';').reduce((acc, part) => {
+    const [k, v] = part.split('=').map((s) => (s || '').trim());
+    if (k) acc[k] = decodeURIComponent(v || '');
+    return acc;
+  }, {});
+};
+
 const isAuthed = (req) => {
   const headerKey = req.headers['x-api-key'];
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   const queryKey = req.query.apiKey || req.query.api_key;
-  if (runtimeConfig.apiKey && (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey)) {
+  const cookies = parseCookies(req);
+  const cookieKey = cookies.apiKey;
+  if (
+    runtimeConfig.apiKey &&
+    (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey || cookieKey === runtimeConfig.apiKey)
+  ) {
     return true;
   }
   return !runtimeConfig.apiKey; // if no API key set, allow open access
@@ -277,6 +291,25 @@ const requireAuth = (req, res, next) => {
   if (isApiRequest(req)) return res.status(401).json({ error: 'unauthorized' });
   return res.status(401).send('Unauthorized');
 };
+
+app.get('/login', (_req, res) => {
+  const apiKeySet = !!runtimeConfig.apiKey;
+  res.render('login', { error: null, apiKeySet });
+});
+
+app.post('/login', bodyParser.urlencoded({ extended: false }), (req, res) => {
+  const submitted = req.body?.apiKey || '';
+  if (runtimeConfig.apiKey && submitted === runtimeConfig.apiKey) {
+    res.cookie('apiKey', submitted, { httpOnly: false, sameSite: 'lax' });
+    return res.redirect('/admin');
+  }
+  return res.status(401).render('login', { error: 'Invalid API key', apiKeySet: !!runtimeConfig.apiKey });
+});
+
+app.get('/logout', (_req, res) => {
+  res.clearCookie('apiKey');
+  res.redirect('/login');
+});
 
 app.get('/', requireAuth, (_req, res) => res.redirect('/admin'));
 app.get('/admin', requireAuth, (_req, res) => res.render('dashboard'));
