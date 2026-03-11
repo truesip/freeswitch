@@ -11,6 +11,8 @@ navButtons.forEach((btn) => {
 });
 
 let chart;
+let callsPage = 1;
+const callsPageSize = 10;
 async function loadStats() {
   try {
     const res = await fetch('/api/stats');
@@ -44,10 +46,17 @@ async function loadStats() {
   }
 }
 
-async function loadCalls() {
+async function loadCalls(page = callsPage) {
   try {
-    const res = await fetch('/api/calls?limit=100');
-    const rows = await res.json();
+    callsPage = page;
+    const params = new URLSearchParams({ page: callsPage, limit: callsPageSize });
+    const res = await fetch(`/api/calls?${params.toString()}`);
+    const payload = await res.json();
+    const rows = Array.isArray(payload) ? payload : payload.data || [];
+    const total = Array.isArray(payload) ? rows.length : payload.total ?? rows.length;
+    const pages = Array.isArray(payload)
+      ? Math.max(1, Math.ceil(rows.length / callsPageSize))
+      : payload.pages || Math.max(1, Math.ceil((payload.total || rows.length) / callsPageSize));
     const tbody = document.getElementById('calls-body');
     tbody.innerHTML = '';
     rows.forEach((r) => {
@@ -63,9 +72,19 @@ async function loadCalls() {
       `;
       tbody.appendChild(tr);
     });
+    updatePagination(total, pages);
   } catch (err) {
     console.error('calls error', err);
   }
+}
+function updatePagination(total, pages) {
+  const info = document.getElementById('calls-page-info');
+  const prev = document.getElementById('calls-prev');
+  const next = document.getElementById('calls-next');
+  if (!info || !prev || !next) return;
+  info.textContent = `Page ${callsPage} of ${pages || 1}${total ? ` (${total} total)` : ''}`;
+  prev.disabled = callsPage <= 1;
+  next.disabled = callsPage >= (pages || 1);
 }
 
 const serverForm = document.getElementById('server-form');
@@ -98,3 +117,10 @@ function tick() {
 }
 tick();
 setInterval(tick, 10000);
+
+document.getElementById('calls-prev')?.addEventListener('click', () => {
+  if (callsPage > 1) loadCalls(callsPage - 1);
+});
+document.getElementById('calls-next')?.addEventListener('click', () => {
+  loadCalls(callsPage + 1);
+});

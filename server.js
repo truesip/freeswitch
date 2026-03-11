@@ -363,20 +363,25 @@ app.get('/api/stats', requireAuth, async (_req, res) => {
   });
 });
 
-// API: recent calls
+// API: recent calls (paginated)
 app.get('/api/calls', requireAuth, async (req, res) => {
-  if (!pool) return res.json([]);
-  const limit = Math.min(Number(req.query.limit) || 50, 500);
+  if (!pool) return res.json({ data: [], total: 0, page: 1, limit: 10, pages: 0 });
+  const limit = Math.min(Number(req.query.limit) || 10, 500);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const offset = (page - 1) * limit;
+  const [countRows] = await pool.query('SELECT COUNT(*) as total FROM call_logs');
+  const total = countRows[0]?.total || 0;
+  const pages = Math.ceil(total / limit) || 1;
   const [rows] = await pool.query(
     `SELECT id, to_number as toNumber, from_number as fromNumber, audio_url as audioUrl,
             status, job_id as jobId, error, duration_sec as durationSec, amd_status as amdStatus,
             created_at as createdAt
      FROM call_logs
      ORDER BY created_at DESC
-     LIMIT ?`,
-    [limit]
+     LIMIT ? OFFSET ?`,
+    [limit, offset]
   );
-  res.json(rows);
+  res.json({ data: rows, total, page, limit, pages });
 });
 
 // API: server config update
