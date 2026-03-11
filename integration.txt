@@ -1,0 +1,112 @@
+ASTERISK + APP PLATFORM INTEGRATION
+
+Prereqs
+- Asterisk/FreePBX with PJSIP enabled.
+- ARI HTTP reachable (usually :8088).
+- One reachable PJSIP endpoint or a registered trunk.
+- App deployed (this repo, branch master) to DigitalOcean App Platform.
+
+Asterisk/FreePBX setup
+1) Enable ARI
+   - http.conf: enabled=yes, bindaddr=0.0.0.0, bindport=8088 (or your port)
+2) ARI user (ari.conf or ari_additional_custom.conf):
+   [asterisk]
+   type = user
+   read_only = no
+   password = <ARI_PASSWORD>
+   read = all
+   write = all
+   allowed_applications = dialer
+   Reload: fwconsole reload (or asterisk -rx "module reload ari.so")
+3) PJSIP endpoint/trunk
+   - Confirm: asterisk -rx "pjsip show endpoints"
+               asterisk -rx "pjsip show registrations"
+   - Use a registered trunk name (e.g., carrier1) or an endpoint (e.g., 9919989).
+4) (Optional) Upload audio to sounds:
+   mkdir -p /var/lib/asterisk/sounds/custom
+   ffmpeg -y -i your.wav -ar 8000 -ac 1 -sample_fmt s16 /var/lib/asterisk/sounds/custom/custom8000.wav
+   chown asterisk:asterisk /var/lib/asterisk/sounds/custom/custom8000.wav
+   Use as audioUrl: sound:custom/custom8000
+
+App Platform deployment
+- Connect repo truesip/freeswitch (master).
+- Run command: node server.js
+- Env vars:
+  PORT                  (App Platform provides)
+  ARI_HOST              (Asterisk IP/DNS)
+  ARI_PORT              (e.g., 8088)
+  ARI_USER              (e.g., asterisk)
+  ARI_PASSWORD          (<ARI_PASSWORD>)
+  ARI_APP               dialer
+  PJSIP_PREFIX          PJSIP/
+  WEBHOOK_URL           (optional)
+  DATABASE_URL          (MySQL URL)
+  API_KEY               (required if you want auth; set a strong token)
+
+Authentication
+- All endpoints accept: header x-api-key: <API_KEY> OR Authorization: Bearer <API_KEY> OR ?apiKey=<API_KEY>
+- If API_KEY is unset, all endpoints are open (not recommended). No cookies or login are used.
+
+Dial string logic
+- endpoint = PJSIP_PREFIX + toNumber
+  Example trunk: toNumber="+15551234567@carrier1" -> PJSIP/+15551234567@carrier1
+  Example endpoint: toNumber="9919989" -> PJSIP/9919989
+
+API calls
+- Base: https://<app-domain>
+- Health: GET /health
+- Place call: POST /call
+  Body: { "toNumber": "...", "fromNumber": "...", "audioUrl": "..." }
+- Audio endpoints:
+  * POST /api/audio/upload (multipart form-data, field file) -> {recordingName, playbackUri}
+  * GET /api/audio -> list stored recordings
+  * DELETE /api/audio/:name -> delete stored recording
+
+Audio options for audioUrl
+- Uploaded: use playbackUri returned (e.g., recording:audio_1710000000000)
+- Stream HTTP/HTTPS: sound:https://yourcdn.com/promo.wav
+- Local sounds: sound:custom/custom8000
+
+curl examples (Linux/macOS)
+  API_KEY=supersecret
+  BASE=https://<app-domain>
+
+  # Upload audio (<=10 MB)
+  curl -H "x-api-key: $API_KEY" -F "file=@/path/to/audio.wav" $BASE/api/audio/upload
+  # -> playbackUri like recording:audio_1710000000000
+
+  # Place call using uploaded audio
+  curl -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+    --data '{"toNumber":"+15551234567@carrier1","fromNumber":"+15559876543","audioUrl":"recording:audio_1710000000000"}' \
+    $BASE/call
+
+  # Place call streaming HTTP audio
+  curl -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+    --data '{"toNumber":"+15551234567@carrier1","fromNumber":"+15559876543","audioUrl":"sound:https://yourcdn.com/promo.wav"}' \
+    $BASE/call
+
+curl.exe (Windows PowerShell)
+  $env:API_KEY="supersecret"
+  $base="https://<app-domain>"
+
+  # Upload
+  curl.exe -H \"x-api-key: $env:API_KEY\" -F \"file=@C:/path/audio.wav\" \"$base/api/audio/upload\"
+
+  # Call
+  curl.exe -H \"x-api-key: $env:API_KEY\" -H \"Content-Type: application/json\" ^
+    --data \"{\\\"toNumber\\\":\\\"+15551234567@carrier1\\\",\\\"fromNumber\\\":\\\"+15559876543\\\",\\\"audioUrl\\\":\\\"recording:audio_1710000000000\\\"}\" ^
+    \"$base/call\"
+
+Admin UI
+- https://<app-domain>/admin (pass API key via header or ?apiKey=)
+- Server tab: update ARI host/port/user/pass, PJSIP prefix, webhook URL.
+- Call History shows status/duration/errors.
+
+Auto-hangup
+- Calls hang up automatically after playback finishes (PlaybackFinished -> hangup).
+
+Troubleshooting
+- “Allocation failed”: trunk/endpoint not reachable. Check pjsip show endpoints/registrations.
+- No audio: ensure audioUrl uses sound:custom/... that exists under /var/lib/asterisk/sounds/.
+- “channelId is a required path param”: ensure latest deploy (commit 276d3ca or newer).
+- Duration appears after hangup (ChannelDestroyed event).
