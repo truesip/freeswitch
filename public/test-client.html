@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dialer Test Client</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 1.5rem;
+        line-height: 1.4;
+      }
+      h1 {
+        margin-bottom: 0.5rem;
+      }
+      fieldset {
+        margin-bottom: 1.5rem;
+        padding: 1rem;
+      }
+      legend {
+        font-weight: 600;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.5rem;
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="url"],
+      select {
+        width: 100%;
+        max-width: 480px;
+        padding: 0.25rem 0.4rem;
+        box-sizing: border-box;
+      }
+      input[type="file"] {
+        margin-top: 0.25rem;
+      }
+      button {
+        margin-top: 0.5rem;
+        padding: 0.35rem 0.8rem;
+        cursor: pointer;
+      }
+      .row {
+        margin-bottom: 0.5rem;
+      }
+      small {
+        color: #666;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+        min-width: 320px;
+      }
+      th, td {
+        border: 1px solid #ddd;
+        padding: 0.35rem 0.5rem;
+        font-size: 0.9rem;
+      }
+      th {
+        background: #f4f4f4;
+      }
+      pre {
+        background: #111;
+        color: #eee;
+        padding: 0.5rem;
+        overflow: auto;
+        font-size: 0.8rem;
+        max-height: 220px;
+      }
+      .success { color: #0a7a25; }
+      .error { color: #b00020; }
+    </style>
+  </head>
+  <body>
+    <h1>Dialer Test Client</h1>
+    <p>
+      Simple UI to test <code>/api/audio/upload</code>, <code>/api/audio</code>, <code>/api/audio/:name</code>, and
+      <code>/call</code> on your dialer server.
+    </p>
+
+    <fieldset>
+      <legend>Connection</legend>
+      <div class="row">
+        <label>
+          API Base URL
+          <input id="baseUrl" type="url" placeholder="https://api.truesip.net" />
+        </label>
+        <small>
+          Defaults to this page's origin (e.g. <code>http://localhost:8080</code> when running locally).
+        </small>
+      </div>
+      <div class="row">
+        <label>
+          API Key (x-api-key)
+          <input id="apiKey" type="password" autocomplete="off" />
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>1. Upload Audio</legend>
+      <div class="row">
+        <label>
+          Audio file
+          <input id="audioFile" type="file" accept="audio/*,.wav,.mp3,.gsm" />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Optional friendly name (no extension)
+          <input id="audioName" type="text" placeholder="e.g. promo1" />
+        </label>
+      </div>
+      <button id="uploadBtn">Upload</button>
+      <div id="uploadStatus"></div>
+      <pre id="uploadResult"></pre>
+    </fieldset>
+
+    <fieldset>
+      <legend>2. Stored Recordings</legend>
+      <button id="refreshRecordings">Refresh list</button>
+      <div id="listStatus"></div>
+      <table id="recordingsTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Playback URI</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="recordingsBody">
+        </tbody>
+      </table>
+    </fieldset>
+
+    <fieldset>
+      <legend>3. Place Outbound Call</legend>
+      <div class="row">
+        <label>
+          To Number
+          <input id="toNumber" type="text" placeholder="e.g. 9919989 or +15551234567@carrier1" />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          From Number (Caller ID)
+          <input id="fromNumber" type="text" placeholder="e.g. +15559876543" />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Audio URL
+          <input id="audioUrl" type="text" placeholder="recording:... or sound:custom/custom8000" />
+        </label>
+        <small>
+          You can pick from the recordings list below to auto-fill this field.
+        </small>
+      </div>
+      <div class="row">
+        <label>
+          Use recording
+          <select id="recordingSelect">
+            <option value="">-- none --</option>
+          </select>
+        </label>
+        <small>Selecting a recording will populate the Audio URL with its playback URI.</small>
+      </div>
+      <button id="callBtn">Place Call</button>
+      <div id="callStatus"></div>
+      <pre id="callResult"></pre>
+    </fieldset>
+
+    <script>
+      (function () {
+        const baseInput = document.getElementById('baseUrl');
+        const apiKeyInput = document.getElementById('apiKey');
+
+        const uploadBtn = document.getElementById('uploadBtn');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadResult = document.getElementById('uploadResult');
+
+        const refreshRecordingsBtn = document.getElementById('refreshRecordings');
+        const listStatus = document.getElementById('listStatus');
+        const recordingsBody = document.getElementById('recordingsBody');
+        const recordingSelect = document.getElementById('recordingSelect');
+
+        const callBtn = document.getElementById('callBtn');
+        const callStatus = document.getElementById('callStatus');
+        const callResult = document.getElementById('callResult');
+        const toNumberInput = document.getElementById('toNumber');
+        const fromNumberInput = document.getElementById('fromNumber');
+        const audioUrlInput = document.getElementById('audioUrl');
+
+        function getBase() {
+          const v = (baseInput.value || '').trim();
+          if (v) return v.replace(/\/$/, '');
+          return window.location.origin.replace(/\/$/, '');
+        }
+
+        function authHeaders() {
+          const key = apiKeyInput.value.trim();
+          return key ? { 'x-api-key': key } : {};
+        }
+
+        function setStatus(el, text, isError) {
+          el.textContent = text || '';
+          el.className = isError ? 'error' : text ? 'success' : '';
+        }
+
+        function safeJson(obj) {
+          try {
+            return JSON.stringify(obj, null, 2);
+          } catch (e) {
+            return String(obj);
+          }
+        }
+
+        async function uploadAudio() {
+          const fileInput = document.getElementById('audioFile');
+          const nameInput = document.getElementById('audioName');
+          const file = fileInput.files[0];
+          if (!file) {
+            setStatus(uploadStatus, 'Please choose an audio file first.', true);
+            return;
+          }
+
+          const fd = new FormData();
+          fd.append('file', file);
+          const name = nameInput.value.trim();
+          if (name) fd.append('name', name);
+
+          uploadResult.textContent = '';
+          setStatus(uploadStatus, 'Uploading...', false);
+
+          try {
+            const res = await fetch(getBase() + '/api/audio/upload', {
+              method: 'POST',
+              headers: authHeaders(),
+              body: fd
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              setStatus(uploadStatus, 'Upload failed: ' + (data.error || res.statusText), true);
+            } else {
+              setStatus(uploadStatus, 'Upload successful.', false);
+              uploadResult.textContent = safeJson(data);
+              if (data.playbackUri) {
+                audioUrlInput.value = data.playbackUri;
+              }
+              await loadRecordings();
+            }
+          } catch (err) {
+            console.error(err);
+            setStatus(uploadStatus, 'Upload error: ' + err.message, true);
+          }
+        }
+
+        async function loadRecordings() {
+          listStatus.textContent = 'Loading...';
+          recordingsBody.innerHTML = '';
+          recordingSelect.innerHTML = '<option value="">-- none --</option>';
+
+          try {
+            const res = await fetch(getBase() + '/api/audio', {
+              method: 'GET',
+              headers: authHeaders()
+            });
+            const list = await res.json().catch(() => []);
+
+            if (!res.ok) {
+              setStatus(listStatus, 'Error loading recordings: ' + (list.error || res.statusText), true);
+              return;
+            }
+
+            setStatus(listStatus, 'Loaded ' + list.length + ' recordings.', false);
+
+            (list || []).forEach(function (item) {
+              const name = item.name || item.recordingName || item.id || '';
+              // For Asterisk ARI stored recordings, playback URI is usually `recording:<name>`
+              const playbackUri = 'recording:' + name;
+
+              const tr = document.createElement('tr');
+
+              const tdName = document.createElement('td');
+              tdName.textContent = name;
+              tr.appendChild(tdName);
+
+              const tdUri = document.createElement('td');
+              tdUri.textContent = playbackUri;
+              tr.appendChild(tdUri);
+
+              const tdActions = document.createElement('td');
+              const useBtn = document.createElement('button');
+              useBtn.textContent = 'Use for call';
+              useBtn.onclick = function () {
+                audioUrlInput.value = playbackUri;
+              };
+
+              const delBtn = document.createElement('button');
+              delBtn.textContent = 'Delete';
+              delBtn.style.marginLeft = '0.5rem';
+              delBtn.onclick = async function () {
+                if (!confirm('Delete recording ' + name + '?')) return;
+                try {
+                  const r = await fetch(getBase() + '/api/audio/' + encodeURIComponent(name), {
+                    method: 'DELETE',
+                    headers: authHeaders()
+                  });
+                  const d = await r.json().catch(() => ({}));
+                  if (!r.ok) {
+                    alert('Delete failed: ' + (d.error || r.statusText));
+                  } else {
+                    await loadRecordings();
+                  }
+                } catch (e) {
+                  alert('Delete error: ' + e.message);
+                }
+              };
+
+              tdActions.appendChild(useBtn);
+              tdActions.appendChild(delBtn);
+              tr.appendChild(tdActions);
+
+              recordingsBody.appendChild(tr);
+
+              const opt = document.createElement('option');
+              opt.value = playbackUri;
+              opt.textContent = name + ' (' + playbackUri + ')';
+              recordingSelect.appendChild(opt);
+            });
+          } catch (err) {
+            console.error(err);
+            setStatus(listStatus, 'Error loading recordings: ' + err.message, true);
+          }
+        }
+
+        recordingSelect.addEventListener('change', function () {
+          if (this.value) {
+            audioUrlInput.value = this.value;
+          }
+        });
+
+        async function placeCall() {
+          const toNumber = toNumberInput.value.trim();
+          const fromNumber = fromNumberInput.value.trim();
+          const audioUrl = audioUrlInput.value.trim();
+
+          if (!toNumber || !fromNumber || !audioUrl) {
+            setStatus(callStatus, 'toNumber, fromNumber, and audioUrl are required.', true);
+            return;
+          }
+
+          const payload = { toNumber: toNumber, fromNumber: fromNumber, audioUrl: audioUrl };
+
+          callResult.textContent = '';
+          setStatus(callStatus, 'Placing call...', false);
+
+          try {
+            const res = await fetch(getBase() + '/call', {
+              method: 'POST',
+              headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              setStatus(callStatus, 'Call failed: ' + (data.error || data.detail || res.statusText), true);
+            } else {
+              setStatus(callStatus, 'Call placed.', false);
+              callResult.textContent = safeJson(data);
+            }
+          } catch (err) {
+            console.error(err);
+            setStatus(callStatus, 'Call error: ' + err.message, true);
+          }
+        }
+
+        uploadBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          uploadAudio();
+        });
+
+        refreshRecordingsBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          loadRecordings();
+        });
+
+        callBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          placeCall();
+        });
+
+        // Initialize base URL to current origin for convenience
+        baseInput.value = window.location.origin.replace(/\/$/, '');
+      })();
+    </script>
+  </body>
+</html>

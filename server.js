@@ -13,8 +13,19 @@ const multer = require('multer');
 
 // Load env (standard .env, then fallback to the provided sample filename)
 dotenv.config();
-if (!process.env.ARI_HOST && fs.existsSync(path.join(__dirname, '.env,examle.txt'))) {
-  dotenv.config({ path: path.join(__dirname, '.env,examle.txt'), override: false });
+const envExamplePath = path.join(__dirname, '.env.example');
+if (!process.env.ARI_HOST && fs.existsSync(envExamplePath)) {
+  dotenv.config({ path: envExamplePath, override: false });
+}
+
+// Directory to store uploaded audio files that will be streamed over HTTP
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+} catch (e) {
+  console.warn('Warning: could not create uploads directory', e.message || e);
 }
 
 const app = express();
@@ -274,24 +285,13 @@ async function sendWebhook(payload) {
 }
 
 
-async function uploadRecordingToAsterisk(recordingName, file) {
-  const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored/${encodeURIComponent(
-    recordingName
-  )}/content`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': file.mimetype || 'audio/wav',
-      Authorization: ariAuthHeader()
-    },
-    body: file.buffer
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`ARI upload failed (${res.status}): ${text || res.statusText}`);
-  }
-  return recordingName;
+// Store uploaded audio on this server and return a URL Asterisk can stream via HTTP.
+function buildPublicAudioUrl(req, fileName) {
+  const host = req.get('host');
+  const proto = req.protocol || 'http';
+  return `${proto}://${host}/uploads/${encodeURIComponent(fileName)}`;
 }
+
 // Views
 const isApiRequest = (req) => req.path.startsWith('/api') || req.path === '/call';
 const parseCookies = (req) => {
@@ -423,27 +423,40 @@ app.get('/api/stats', requireAuth, async (_req, res) => {
     last7: last7.map((r) => ({ day: r.day, count: r.cnt }))
   });
 });
-// API: audio upload/list/delete using ARI stored recordings
+// API: audio upload/list/delete using HTTP-hosted files on this server
+// The uploaded file is stored under public/uploads and Asterisk streams it via
+// an absolute URL in the form sound:https://host/uploads/filename.wav
 app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'file is required (multipart/form-data field "file")' });
+    if (!req.file) {
+      return res.status(400).json({ error: 'file is required (multipart/form-data field "file")' });
+    }
     const base = (req.body?.name || req.file.originalname || 'audio').replace(/\.[^.]+$/, '');
     const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
-    const recordingName = `${safe}_${Date.now()}`;
-    await uploadRecordingToAsterisk(recordingName, req.file);
-    res.json({ recordingName, playbackUri: `recording:${recordingName}` });
+    const ext = path.extname(req.file.originalname || '') || '.wav';
+    const fileName = `${safe}_${Date.now()}${ext}`;
+    const fullPath = path.join(uploadsDir, fileName);
+
+    await fs.promises.writeFile(fullPath, req.file.buffer);
+    const publicUrl = buildPublicAudioUrl(req, fileName);
+
+    res.json({ recordingName: fileName, playbackUri: `sound:${publicUrl}` });
   } catch (err) {
+    console.error('Upload failed', err);
     res.status(500).json({ error: err.message || 'upload failed' });
   }
 });
 
-app.get('/api/audio', requireAuth, async (_req, res) => {
+app.get('/api/audio', requireAuth, async (req, res) => {
   try {
-    const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored`;
-    const r = await fetch(url, { headers: { Authorization: ariAuthHeader() } });
-    const list = await r.json();
-    res.json(list || []);
+    const files = await fs.promises.readdir(uploadsDir);
+    const list = files.map((name) => ({
+      name,
+      playbackUri: `sound:${buildPublicAudioUrl(req, name)}`
+    }));
+    res.json(list);
   } catch (err) {
+    console.error('List audio failed', err);
     res.status(500).json({ error: err.message || 'list failed' });
   }
 });
@@ -451,16 +464,14 @@ app.get('/api/audio', requireAuth, async (_req, res) => {
 app.delete('/api/audio/:name', requireAuth, async (req, res) => {
   try {
     const name = req.params.name;
-    const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored/${encodeURIComponent(
-      name
-    )}`;
-    const r = await fetch(url, { method: 'DELETE', headers: { Authorization: ariAuthHeader() } });
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      return res.status(r.status).json({ error: text || r.statusText });
-    }
+    const filePath = path.join(uploadsDir, name);
+    await fs.promises.unlink(filePath);
     res.json({ deleted: name });
   } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return res.status(404).json({ error: 'not found' });
+    }
+    console.error('Delete audio failed', err);
     res.status(500).json({ error: err.message || 'delete failed' });
   }
 });
@@ -518,7 +529,7 @@ app.post('/api/server', requireAuth, async (req, res) => {
     process.env.DB_NAME ? `DB_NAME=${process.env.DB_NAME}` : null
   ]
     .filter(Boolean)
-    .join('\\n');
+    .join('\n');
   const envPath = path.join(__dirname, '.env');
   fs.writeFileSync(envPath, envOut, 'utf8');
   res.json({ saved: true, ariHost, webhookUrl: runtimeConfig.webhookUrl });

@@ -110,3 +110,21 @@ Troubleshooting
 - No audio: ensure audioUrl uses sound:custom/... that exists under /var/lib/asterisk/sounds/.
 - “channelId is a required path param”: ensure latest deploy (commit 276d3ca or newer).
 - Duration appears after hangup (ChannelDestroyed event).
+
+
+
+PowerShell Invoke-RestMethod example:
+$env:API_KEY = "YOUR_API_KEY"
+$base        = "https://api.truesip.net"
+
+$body = @{
+  toNumber   = "9919989"
+  fromNumber = "+15559876543"
+  audioUrl   = "sound:custom/custom8000"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "$base/call" `
+                  -Method Post `
+                  -Headers @{ "x-api-key" = $env:API_KEY } `
+                  -ContentType "application/json" `
+                  -Body $body
