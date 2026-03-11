@@ -140,9 +140,13 @@ async function connectAri() {
 
     ari.on('StasisStart', (event) => {
       const chan = event.channel;
-      const channelId = chan && (chan.id || chan.channel_id);
+      const channelId =
+        event?.channel?.id ||
+        event?.channel?.channel_id ||
+        event?.channel?.name ||
+        (typeof event?.channel === 'string' ? event.channel : null);
       if (!channelId) {
-        console.error('StasisStart missing channel id', JSON.stringify(event));
+        console.error('StasisStart missing channel id', JSON.stringify(event, null, 2));
         return;
       }
       const uuid = channelId;
