@@ -140,18 +140,27 @@ async function connectAri() {
 
     ari.on('StasisStart', (event) => {
       const chan = event.channel;
-      const uuid = chan.id;
+      const channelId = chan && (chan.id || chan.channel_id);
+      if (!channelId) {
+        console.error('StasisStart missing channel id', JSON.stringify(event));
+        return;
+      }
+      const uuid = channelId;
       const now = new Date();
       callCache.set(uuid, { ...(callCache.get(uuid) || {}), answer: now });
       updateCallStatus(uuid, { status: 'answered', answer_time: now }).catch(console.error);
       // Ensure channel is answered before playback
-      ari.channels.answer(chan.id).catch((err) => console.error('answer error', err?.message || err));
+      ari.channels
+        .answer(channelId)
+        .catch((err) => console.error('answer error', err?.message || err));
       fetchCallByUuid(uuid)
         .then((row) => sendWebhook({ event: 'answered', uuid, ...row, timestamp: now }))
         .catch(console.error);
       const audio = (event.args && event.args[0]) || chan?.variables?.audio_url;
       if (audio) {
-        ari.channels.play(chan.id, { media: audio }).catch((err) => console.error('play error', err));
+        ari.channels
+          .play(channelId, { media: audio })
+          .catch((err) => console.error('play error', err?.message || err));
       }
     });
 
