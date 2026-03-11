@@ -7,8 +7,6 @@ const bodyParser = require('body-parser');
 const AriClient = require('ari-client');
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
-const session = require('express-session');
-const MySQLStore = require('express-mysql-session')(session);
 const multer = require('multer');
 
 // Load env (standard .env, then fallback to the provided sample filename)
@@ -110,32 +108,6 @@ async function initDb() {
   }
 }
 
-// Session store (must come after dbConfig definition)
-let sessionStore = null;
-const sessionOpts = {
-  secret: process.env.SESSION_SECRET || 'esl-admin-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 8 } // 8 hours
-};
-if (dbConfig && dbConfig.host) {
-  const storeOptions = {
-    host: dbConfig.host,
-    port: dbConfig.port || 3306,
-    user: dbConfig.user,
-    password: dbConfig.password,
-    database: dbConfig.database,
-    clearExpired: true,
-    checkExpirationInterval: 1000 * 60 * 10,
-    expiration: 1000 * 60 * 60 * 8,
-    createDatabaseTable: true
-  };
-  sessionStore = new MySQLStore(storeOptions);
-  sessionOpts.store = sessionStore;
-} else {
-  console.warn('Warning: using in-memory session store; set DB env for production.');
-}
-app.use(session(sessionOpts));
 
 let ari = null;
 let ariReady = false;
@@ -292,41 +264,21 @@ async function uploadRecordingToAsterisk(recordingName, file) {
 // Views
 const isApiRequest = (req) => req.path.startsWith('/api') || req.path === '/call';
 const isAuthed = (req) => {
-  if (req.session?.auth) return true;
-  if (runtimeConfig.apiKey) {
-    const headerKey = req.headers['x-api-key'];
-    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-    if (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey) return true;
+  const headerKey = req.headers['x-api-key'];
+  const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const queryKey = req.query.apiKey || req.query.api_key;
+  if (runtimeConfig.apiKey && (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey)) {
+    return true;
   }
-  return false;
+  return !runtimeConfig.apiKey; // if no API key set, allow open access
 };
 const requireAuth = (req, res, next) => {
   if (isAuthed(req)) return next();
   if (isApiRequest(req)) return res.status(401).json({ error: 'unauthorized' });
-  return res.redirect('/login');
+  return res.status(401).send('Unauthorized');
 };
 
-app.get('/', (_req, res) => res.redirect('/admin'));
-app.get('/login', (req, res) => {
-  if (req.session?.auth) return res.redirect('/admin');
-  res.render('login', { error: null });
-});
-
-app.post('/login', bodyParser.urlencoded({ extended: false }), (req, res) => {
-  const { username, password } = req.body || {};
-  const u = process.env.ADMIN_USER || 'admin';
-  const p = process.env.ADMIN_PASS || 'admin123';
-  if (username === u && password === p) {
-    req.session.auth = true;
-    return res.redirect('/admin');
-  }
-  return res.render('login', { error: 'Invalid credentials' });
-});
-
-app.post('/logout', (req, res) => {
-  req.session?.destroy(() => res.redirect('/login'));
-});
-
+app.get('/', requireAuth, (_req, res) => res.redirect('/admin'));
 app.get('/admin', requireAuth, (_req, res) => res.render('dashboard'));
 
 // API: place call
