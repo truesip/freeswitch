@@ -124,3 +124,8 @@ document.getElementById('calls-prev')?.addEventListener('click', () => {
 document.getElementById('calls-next')?.addEventListener('click', () => {
   loadCalls(callsPage + 1);
 });
+
+document.getElementById('logout-btn')?.addEventListener('click', () => {
+  // Drop apiKey by navigating without query; will hit 401 if API_KEY is enforced
+  window.location.href = '/admin';
+});
