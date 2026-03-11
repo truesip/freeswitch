@@ -7,6 +7,8 @@ const bodyParser = require('body-parser');
 const AriClient = require('ari-client');
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
+const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 const multer = require('multer');
 
 // Load env (standard .env, then fallback to the provided sample filename)
@@ -109,6 +111,35 @@ async function initDb() {
 }
 
 
+// Session store
+let sessionStore = null;
+const sessionOpts = {
+  secret: process.env.SESSION_SECRET || 'admin-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 1000 * 60 * 60 * 8 }
+};
+if (dbConfig && dbConfig.host) {
+  try {
+    sessionStore = new MySQLStore({
+      host: dbConfig.host,
+      port: dbConfig.port || 3306,
+      user: dbConfig.user,
+      password: dbConfig.password,
+      database: dbConfig.database,
+      clearExpired: true,
+      checkExpirationInterval: 1000 * 60 * 10,
+      expiration: 1000 * 60 * 60 * 8,
+      createDatabaseTable: true
+    });
+    sessionOpts.store = sessionStore;
+  } catch (e) {
+    console.warn('Session store fallback to memory:', e.message);
+  }
+} else {
+  console.warn('Using in-memory session store; set DB env for production.');
+}
+app.use(session(sessionOpts));
 let ari = null;
 let ariReady = false;
 const callCache = new Map(); // uuid -> {ring, answer}
@@ -273,6 +304,7 @@ const parseCookies = (req) => {
 };
 
 const isAuthed = (req) => {
+  if (req.session?.auth) return true;
   const headerKey = req.headers['x-api-key'];
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   const queryKey = req.query.apiKey || req.query.api_key;
@@ -289,7 +321,7 @@ const isAuthed = (req) => {
 const requireAuth = (req, res, next) => {
   if (isAuthed(req)) return next();
   if (isApiRequest(req)) return res.status(401).json({ error: 'unauthorized' });
-  return res.status(401).send('Unauthorized');
+  return res.redirect('/login');
 };
 
 app.get('/login', (_req, res) => {
@@ -298,17 +330,27 @@ app.get('/login', (_req, res) => {
 });
 
 app.post('/login', bodyParser.urlencoded({ extended: false }), (req, res) => {
-  const submitted = req.body?.apiKey || '';
-  if (runtimeConfig.apiKey && submitted === runtimeConfig.apiKey) {
-    res.cookie('apiKey', submitted, { httpOnly: false, sameSite: 'lax' });
+  const { username, password, apiKey } = req.body || {};
+  const u = process.env.ADMIN_USER || 'admin';
+  const p = process.env.ADMIN_PASS || 'admin123';
+  if (username && password && username === u && password === p) {
+    req.session.auth = true;
     return res.redirect('/admin');
   }
-  return res.status(401).render('login', { error: 'Invalid API key', apiKeySet: !!runtimeConfig.apiKey });
+  if (runtimeConfig.apiKey && apiKey === runtimeConfig.apiKey) {
+    res.cookie('apiKey', apiKey, { httpOnly: false, sameSite: 'lax' });
+    return res.redirect('/admin');
+  }
+  return res.status(401).render('login', { error: 'Invalid credentials', apiKeySet: !!runtimeConfig.apiKey });
 });
 
 app.get('/logout', (_req, res) => {
   res.clearCookie('apiKey');
-  res.redirect('/login');
+  if (res.req?.session) {
+    res.req.session.destroy(() => res.redirect('/login'));
+  } else {
+    res.redirect('/login');
+  }
 });
 
 app.get('/', requireAuth, (_req, res) => res.redirect('/admin'));
