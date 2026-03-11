@@ -31,6 +31,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 100vh;
 }
 .logo {
   font-weight: 700;
@@ -56,6 +57,7 @@ body {
 }
 .sidebar-footer {
   margin-top: auto;
+  padding-top: 12px;
 }
 .ghost-btn {
   width: 100%;
