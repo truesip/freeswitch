@@ -144,6 +144,8 @@ async function connectAri() {
       const now = new Date();
       callCache.set(uuid, { ...(callCache.get(uuid) || {}), answer: now });
       updateCallStatus(uuid, { status: 'answered', answer_time: now }).catch(console.error);
+      // Ensure channel is answered before playback
+      ari.channels.answer(chan.id).catch((err) => console.error('answer error', err?.message || err));
       fetchCallByUuid(uuid)
         .then((row) => sendWebhook({ event: 'answered', uuid, ...row, timestamp: now }))
         .catch(console.error);
