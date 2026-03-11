@@ -49,8 +49,18 @@ const runtimeConfig = {
 if (!process.env.ARI_HOST) {
   console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
 }
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    const base = (req.body?.name || file.originalname || 'audio').replace(/\.[^.]+$/, '');
+    const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
+    const ext = path.extname(file.originalname || '') || '.wav';
+    cb(null, `${safe}_${Date.now()}${ext}`);
+  }
+});
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   limits: { fileSize: 10 * 1024 * 1024 } // 10 MB
 });
 
@@ -439,13 +449,7 @@ app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, re
     if (!req.file) {
       return res.status(400).json({ error: 'file is required (multipart/form-data field "file")' });
     }
-    const base = (req.body?.name || req.file.originalname || 'audio').replace(/\.[^.]+$/, '');
-    const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
-    const ext = path.extname(req.file.originalname || '') || '.wav';
-    const fileName = `${safe}_${Date.now()}${ext}`;
-    const fullPath = path.join(uploadsDir, fileName);
-
-    await fs.promises.writeFile(fullPath, req.file.buffer);
+    const fileName = req.file.filename;
     const publicUrl = buildPublicAudioUrl(req, fileName);
 
     res.json({ recordingName: fileName, playbackUri: `sound:${publicUrl}` });
