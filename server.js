@@ -164,6 +164,13 @@ async function connectAri() {
       if (audio) {
         ari.channels
           .play({ channelId, media: audio })
+          .then((playback) => {
+            playback.once('PlaybackFinished', () => {
+              ari.channels
+                .hangup({ channelId })
+                .catch((err) => console.error('hangup error', err?.message || err));
+            });
+          })
           .catch((err) => console.error('play error', err?.message || err));
       }
     });
