@@ -61,26 +61,34 @@
           <div class="panel">
             <div class="panel-header">FreeSWITCH Connection</div>
             <form id="server-form">
-              <div class="form-row">
-                <label>FS Host</label>
-                <input name="fsHost" required placeholder="127.0.0.1" />
-              </div>
-              <div class="form-row">
-                <label>FS Port</label>
-                <input name="fsPort" type="number" required value="8021" />
-              </div>
-              <div class="form-row">
-                <label>FS Password</label>
-                <input name="fsPassword" type="password" required placeholder="ClueCon" />
-              </div>
-              <div class="form-row">
-                <label>Dial Prefix</label>
-                <input name="dialPrefix" required placeholder="sofia/gateway/public/" />
-              </div>
-              <div class="form-row">
-                <label>Webhook URL (optional)</label>
-                <input name="webhookUrl" placeholder="https://example.com/webhook" />
-              </div>
+            <div class="form-row">
+              <label>ARI Host</label>
+              <input name="ariHost" required placeholder="127.0.0.1" />
+            </div>
+            <div class="form-row">
+              <label>ARI Port</label>
+              <input name="ariPort" type="number" required value="8088" />
+            </div>
+            <div class="form-row">
+              <label>ARI User</label>
+              <input name="ariUser" required placeholder="ariuser" />
+            </div>
+            <div class="form-row">
+              <label>ARI Password</label>
+              <input name="ariPassword" type="password" required placeholder="aripass" />
+            </div>
+            <div class="form-row">
+              <label>ARI App</label>
+              <input name="ariApp" required placeholder="dialer" />
+            </div>
+            <div class="form-row">
+              <label>PJSIP Prefix</label>
+              <input name="dialPrefix" required placeholder="PJSIP/" />
+            </div>
+            <div class="form-row">
+              <label>Webhook URL (optional)</label>
+              <input name="webhookUrl" placeholder="https://example.com/webhook" />
+            </div>
               <button type="submit">Save & Reconnect</button>
               <div id="server-msg" class="form-msg"></div>
             </form>

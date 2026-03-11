@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const bodyParser = require('body-parser');
-const modEsl = require('modesl');
+const AriClient = require('ari-client');
 const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 const session = require('express-session');
@@ -12,7 +12,7 @@ const MySQLStore = require('express-mysql-session')(session);
 
 // Load env (standard .env, then fallback to the provided sample filename)
 dotenv.config();
-if (!process.env.FS_ESL_HOST && fs.existsSync(path.join(__dirname, '.env,examle.txt'))) {
+if (!process.env.ARI_HOST && fs.existsSync(path.join(__dirname, '.env,examle.txt'))) {
   dotenv.config({ path: path.join(__dirname, '.env,examle.txt'), override: false });
 }
 
@@ -24,15 +24,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.json());
 
 const runtimeConfig = {
-  fsHost: process.env.FS_ESL_HOST || '127.0.0.1',
-  fsPort: Number(process.env.FS_ESL_PORT || 8021),
-  fsPassword: process.env.FS_ESL_PASSWORD || 'ClueCon',
-  dialPrefix: process.env.FS_DIAL_PREFIX || 'sofia/gateway/public/',
+  ariHost: process.env.ARI_HOST || '127.0.0.1',
+  ariPort: Number(process.env.ARI_PORT || 8088),
+  ariUser: process.env.ARI_USER || 'ariuser',
+  ariPassword: process.env.ARI_PASSWORD || 'aripass',
+  ariApp: process.env.ARI_APP || 'dialer',
+  dialPrefix: process.env.PJSIP_PREFIX || 'PJSIP/',
   webhookUrl: process.env.WEBHOOK_URL || '',
   port: Number(process.env.PORT || 8080)
 };
-if (!process.env.FS_ESL_HOST) {
-  console.warn('Warning: FS_ESL_HOST not set; defaulting to 127.0.0.1:8021 (likely to fail in production).');
+if (!process.env.ARI_HOST) {
+  console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
 }
 
 // MySQL pool
@@ -125,53 +127,69 @@ if (dbConfig && dbConfig.host) {
   console.warn('Warning: using in-memory session store; set DB env for production.');
 }
 app.use(session(sessionOpts));
-let eslConn;
-let eslReady = false;
-function closeEsl() {
-  if (eslConn && eslConn.socket && !eslConn.socket.destroyed) {
-    try {
-      eslConn.socket.end();
-    } catch (_) {
-      /* ignore */
-    }
+
+let ari = null;
+let ariReady = false;
+const callCache = new Map(); // uuid -> {ring, answer}
+
+async function connectAri() {
+  ariReady = false;
+  try {
+    const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}`;
+    ari = await AriClient.connect(url, runtimeConfig.ariUser, runtimeConfig.ariPassword);
+
+    ari.on('StasisStart', (event) => {
+      const chan = event.channel;
+      const uuid = chan.id;
+      const now = new Date();
+      callCache.set(uuid, { ...(callCache.get(uuid) || {}), answer: now });
+      updateCallStatus(uuid, { status: 'answered', answer_time: now }).catch(console.error);
+      fetchCallByUuid(uuid)
+        .then((row) => sendWebhook({ event: 'answered', uuid, ...row, timestamp: now }))
+        .catch(console.error);
+      const audio = chan.variables?.audio_url;
+      if (audio) {
+        ari.channels.play(chan.id, { media: audio }).catch((err) => console.error('play error', err));
+      }
+    });
+
+    ari.on('ChannelStateChange', (event) => {
+      const chan = event.channel;
+      if (chan.state === 'Ringing') {
+        const now = new Date();
+        callCache.set(chan.id, { ...(callCache.get(chan.id) || {}), ring: now });
+        updateCallStatus(chan.id, { status: 'ringing', ring_time: now }).catch(console.error);
+        fetchCallByUuid(chan.id)
+          .then((row) => sendWebhook({ event: 'ringing', uuid: chan.id, ...row, timestamp: now }))
+          .catch(console.error);
+      }
+    });
+
+    ari.on('ChannelDestroyed', (event) => {
+      const chan = event.channel;
+      const now = new Date();
+      const cache = callCache.get(chan.id) || {};
+      const duration =
+        cache.answer && now ? Math.max(0, Math.round((now.getTime() - cache.answer.getTime()) / 1000)) : null;
+      updateCallStatus(chan.id, { status: 'hangup', hangup_time: now, duration_sec: duration }).catch(console.error);
+      fetchCallByUuid(chan.id)
+        .then((row) =>
+          sendWebhook({ event: 'hangup', uuid: chan.id, duration, amdStatus: row?.amd_status, ...row, timestamp: now })
+        )
+        .catch(console.error);
+      callCache.delete(chan.id);
+    });
+
+    ariReady = true;
+    console.log(`ARI connected to ${runtimeConfig.ariHost}:${runtimeConfig.ariPort}`);
+    ari.start(runtimeConfig.ariApp);
+  } catch (err) {
+    console.error('ARI connect error:', err.message || err);
+    setTimeout(connectAri, 3000);
   }
-  eslConn = null;
-  eslReady = false;
 }
 
-function connectEsl() {
-  closeEsl();
-  eslConn = new modEsl.Connection(
-    runtimeConfig.fsHost,
-    Number(runtimeConfig.fsPort),
-    runtimeConfig.fsPassword,
-    () => {
-      eslReady = true;
-      console.log(`ESL connected to ${runtimeConfig.fsHost}:${runtimeConfig.fsPort}`);
-      eslConn.events('plain', 'ALL');
-    }
-  );
-
-  eslConn.on('error', (err) => {
-    eslReady = false;
-    console.error('ESL error:', err);
-  });
-
-  const handleClose = () => {
-    eslReady = false;
-    eslConn = null;
-    console.warn('ESL connection closed; retrying in 3s');
-    setTimeout(connectEsl, 3000);
-  };
-
-  eslConn.on('close', handleClose);
-  eslConn.on('esl::end', handleClose);
-  eslConn.on('esl::event::*', (evt) => {
-    setImmediate(() => handleEslEvent(evt).catch((err) => console.error('Event handler error', err)));
-  });
-}
-
-connectEsl();
+connectAri();
 initDb().catch((err) => console.error('DB init failed', err));
 
 async function logCall(entry) {
@@ -221,39 +239,6 @@ async function sendWebhook(payload) {
   }
 }
 
-async function handleEslEvent(evt) {
-  const evName = evt.getHeader('Event-Name');
-  const uuid = evt.getHeader('Unique-ID');
-  if (!uuid) return;
-  const now = new Date();
-  if (evName === 'CHANNEL_STATE') {
-    const state = evt.getHeader('Channel-State');
-    if (state === 'RINGING') {
-      await updateCallStatus(uuid, { status: 'ringing', ring_time: now });
-      const row = await fetchCallByUuid(uuid);
-      await sendWebhook({ event: 'ringing', uuid, ...row, timestamp: now });
-    }
-  } else if (evName === 'CHANNEL_ANSWER') {
-    await updateCallStatus(uuid, { status: 'answered', answer_time: now });
-    const row = await fetchCallByUuid(uuid);
-    await sendWebhook({ event: 'answered', uuid, ...row, timestamp: now });
-  } else if (evName === 'CHANNEL_HANGUP_COMPLETE') {
-    const billsec = Number(evt.getHeader('variable_billsec') || evt.getHeader('variable_duration') || 0);
-    const amd =
-      evt.getHeader('variable_amd_status') ||
-      evt.getHeader('variable_amd_result') ||
-      evt.getHeader('variable_machine') ||
-      null;
-    await updateCallStatus(uuid, {
-      status: 'hangup',
-      hangup_time: now,
-      duration_sec: billsec || null,
-      amd_status: amd || null
-    });
-    const row = await fetchCallByUuid(uuid);
-    await sendWebhook({ event: 'hangup', uuid, duration: billsec, amdStatus: amd, ...row, timestamp: now });
-  }
-}
 
 // Views
 const requireAuth = (req, res, next) => {
@@ -290,34 +275,41 @@ app.post('/call', (req, res) => {
   if (!toNumber || !fromNumber || !audioUrl) {
     return res.status(400).json({ error: 'toNumber, fromNumber, and audioUrl are required' });
   }
-  const sockOk = eslConn && eslConn.socket && !eslConn.socket.destroyed;
-  if (!eslConn || !eslReady || !sockOk) {
-    return res.status(503).json({ error: 'ESL not connected' });
+  if (!ari || !ariReady) {
+    return res.status(503).json({ error: 'ARI not connected' });
   }
 
-  const dialString =
-    `{origination_caller_id_number=${fromNumber},ignore_early_media=true,hangup_after_bridge=true}` +
-    `${runtimeConfig.dialPrefix}${toNumber}`;
-  const appString = `&playback(${audioUrl})`;
-
-  eslConn.api(`originate ${dialString} ${appString}`, async (reply) => {
-    const body = reply && reply.getBody ? reply.getBody() : '';
-    const matchUuid = body.match(/[0-9a-f-]{18,36}/i);
-    const callUuid = matchUuid ? matchUuid[0] : null;
-    const success = body.startsWith('+OK');
-    await logCall({
-      toNumber,
-      fromNumber,
-      audioUrl,
-      status: success ? 'placed' : 'error',
-      jobId: callUuid || body.trim(),
-      error: success ? null : body.trim()
+  const endpoint = `${runtimeConfig.dialPrefix}${toNumber}`;
+  ari.channels
+    .originate({
+      endpoint,
+      callerId: fromNumber,
+      app: runtimeConfig.ariApp,
+      variables: { audio_url: audioUrl }
+    })
+    .then(async (channel) => {
+      const uuid = channel.id;
+      await logCall({
+        toNumber,
+        fromNumber,
+        audioUrl,
+        status: 'placed',
+        jobId: uuid,
+        error: null
+      });
+      res.json({ status: 'placed', job: uuid });
+    })
+    .catch(async (err) => {
+      await logCall({
+        toNumber,
+        fromNumber,
+        audioUrl,
+        status: 'error',
+        jobId: null,
+        error: err.message || String(err)
+      });
+      res.status(500).json({ status: 'error', detail: err.message || String(err) });
     });
-    if (success) {
-      return res.json({ status: 'placed', job: body.trim() });
-    }
-    return res.status(500).json({ status: 'error', detail: body.trim() });
-  });
 });
 
 // API: stats for dashboard
@@ -366,24 +358,27 @@ app.get('/api/calls', requireAuth, async (req, res) => {
 
 // API: server config update
 app.post('/api/server', requireAuth, async (req, res) => {
-  const { fsHost, fsPort, fsPassword, dialPrefix, webhookUrl } = req.body || {};
-  if (!fsHost || !fsPort || !fsPassword || !dialPrefix) {
-    return res.status(400).json({ error: 'fsHost, fsPort, fsPassword, dialPrefix required' });
+  const { ariHost, ariPort, ariUser, ariPassword, ariApp, dialPrefix, webhookUrl } = req.body || {};
+  if (!ariHost || !ariPort || !ariUser || !ariPassword || !dialPrefix || !ariApp) {
+    return res.status(400).json({ error: 'ariHost, ariPort, ariUser, ariPassword, ariApp, dialPrefix required' });
   }
-  runtimeConfig.fsHost = fsHost;
-  runtimeConfig.fsPort = Number(fsPort);
-  runtimeConfig.fsPassword = fsPassword;
+  runtimeConfig.ariHost = ariHost;
+  runtimeConfig.ariPort = Number(ariPort);
+  runtimeConfig.ariUser = ariUser;
+  runtimeConfig.ariPassword = ariPassword;
+  runtimeConfig.ariApp = ariApp;
   runtimeConfig.dialPrefix = dialPrefix;
   runtimeConfig.webhookUrl = webhookUrl || '';
-  connectEsl();
+  connectAri();
 
-  // persist to env file for future runs
   const envOut = [
     `PORT=${runtimeConfig.port}`,
-    `FS_ESL_HOST=${runtimeConfig.fsHost}`,
-    `FS_ESL_PORT=${runtimeConfig.fsPort}`,
-    `FS_ESL_PASSWORD=${runtimeConfig.fsPassword}`,
-    `FS_DIAL_PREFIX=${runtimeConfig.dialPrefix}`,
+    `ARI_HOST=${runtimeConfig.ariHost}`,
+    `ARI_PORT=${runtimeConfig.ariPort}`,
+    `ARI_USER=${runtimeConfig.ariUser}`,
+    `ARI_PASSWORD=${runtimeConfig.ariPassword}`,
+    `ARI_APP=${runtimeConfig.ariApp}`,
+    `PJSIP_PREFIX=${runtimeConfig.dialPrefix}`,
     `WEBHOOK_URL=${runtimeConfig.webhookUrl}`,
     process.env.DATABASE_URL ? `DATABASE_URL=${process.env.DATABASE_URL}` : null,
     process.env.DB_HOST ? `DB_HOST=${process.env.DB_HOST}` : null,
@@ -396,12 +391,12 @@ app.post('/api/server', requireAuth, async (req, res) => {
     .join('\\n');
   const envPath = path.join(__dirname, '.env');
   fs.writeFileSync(envPath, envOut, 'utf8');
-  res.json({ saved: true, fsHost, webhookUrl: runtimeConfig.webhookUrl });
+  res.json({ saved: true, ariHost, webhookUrl: runtimeConfig.webhookUrl });
 });
 
 app.get('/health', (_req, res) => {
-  const connected = !!(eslConn && eslReady && eslConn.socket && !eslConn.socket.destroyed);
-  res.json({ ok: true, eslConnected: connected, dbConnected: !!pool });
+  const connected = !!(ari && ariReady);
+  res.json({ ok: true, ariConnected: connected, dbConnected: !!pool });
 });
 
 app.listen(runtimeConfig.port, () => {

@@ -83,7 +83,7 @@ serverForm?.addEventListener('submit', async (e) => {
     });
     const data = await res.json();
     if (res.ok) {
-      msg.textContent = `Saved. Reconnecting to ${data.fsHost || payload.fsHost}...`;
+      msg.textContent = `Saved. Reconnecting to ${data.ariHost || payload.ariHost}...`;
     } else {
       msg.textContent = data.error || 'Save failed';
     }
