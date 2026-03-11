@@ -9,6 +9,7 @@ const mysql = require('mysql2/promise');
 const dotenv = require('dotenv');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
+const multer = require('multer');
 
 // Load env (standard .env, then fallback to the provided sample filename)
 dotenv.config();
@@ -36,6 +37,13 @@ const runtimeConfig = {
 if (!process.env.ARI_HOST) {
   console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
 }
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10 MB
+});
+
+const ariAuthHeader = () =>
+  'Basic ' + Buffer.from(`${runtimeConfig.ariUser}:${runtimeConfig.ariPassword}`).toString('base64');
 
 // MySQL pool
 const dbConfigFromUrl = () => {
@@ -262,6 +270,24 @@ async function sendWebhook(payload) {
 }
 
 
+async function uploadRecordingToAsterisk(recordingName, file) {
+  const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored/${encodeURIComponent(
+    recordingName
+  )}/content`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.mimetype || 'audio/wav',
+      Authorization: ariAuthHeader()
+    },
+    body: file.buffer
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`ARI upload failed (${res.status}): ${text || res.statusText}`);
+  }
+  return recordingName;
+}
 // Views
 const requireAuth = (req, res, next) => {
   if (req.session?.auth) return next();
@@ -361,6 +387,47 @@ app.get('/api/stats', requireAuth, async (_req, res) => {
     concurrent: concurrentRows[0]?.concurrent || 0,
     last7: last7.map((r) => ({ day: r.day, count: r.cnt }))
   });
+});
+// API: audio upload/list/delete using ARI stored recordings
+app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required (multipart/form-data field "file")' });
+    const base = (req.body?.name || req.file.originalname || 'audio').replace(/\.[^.]+$/, '');
+    const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
+    const recordingName = `${safe}_${Date.now()}`;
+    await uploadRecordingToAsterisk(recordingName, req.file);
+    res.json({ recordingName, playbackUri: `recording:${recordingName}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'upload failed' });
+  }
+});
+
+app.get('/api/audio', requireAuth, async (_req, res) => {
+  try {
+    const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored`;
+    const r = await fetch(url, { headers: { Authorization: ariAuthHeader() } });
+    const list = await r.json();
+    res.json(list || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'list failed' });
+  }
+});
+
+app.delete('/api/audio/:name', requireAuth, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const url = `http://${runtimeConfig.ariHost}:${runtimeConfig.ariPort}/ari/recordings/stored/${encodeURIComponent(
+      name
+    )}`;
+    const r = await fetch(url, { method: 'DELETE', headers: { Authorization: ariAuthHeader() } });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      return res.status(r.status).json({ error: text || r.statusText });
+    }
+    res.json({ deleted: name });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'delete failed' });
+  }
 });
 
 // API: recent calls (paginated)
