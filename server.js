@@ -32,7 +32,8 @@ const runtimeConfig = {
   ariApp: process.env.ARI_APP || 'dialer',
   dialPrefix: process.env.PJSIP_PREFIX || 'PJSIP/',
   webhookUrl: process.env.WEBHOOK_URL || '',
-  port: Number(process.env.PORT || 8080)
+  port: Number(process.env.PORT || 8080),
+  apiKey: process.env.API_KEY || ''
 };
 if (!process.env.ARI_HOST) {
   console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
@@ -289,8 +290,19 @@ async function uploadRecordingToAsterisk(recordingName, file) {
   return recordingName;
 }
 // Views
+const isApiRequest = (req) => req.path.startsWith('/api') || req.path === '/call';
+const isAuthed = (req) => {
+  if (req.session?.auth) return true;
+  if (runtimeConfig.apiKey) {
+    const headerKey = req.headers['x-api-key'];
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey) return true;
+  }
+  return false;
+};
 const requireAuth = (req, res, next) => {
-  if (req.session?.auth) return next();
+  if (isAuthed(req)) return next();
+  if (isApiRequest(req)) return res.status(401).json({ error: 'unauthorized' });
   return res.redirect('/login');
 };
 
@@ -318,7 +330,7 @@ app.post('/logout', (req, res) => {
 app.get('/admin', requireAuth, (_req, res) => res.render('dashboard'));
 
 // API: place call
-app.post('/call', (req, res) => {
+app.post('/call', requireAuth, (req, res) => {
   const { toNumber, fromNumber, audioUrl } = req.body || {};
   if (!toNumber || !fromNumber || !audioUrl) {
     return res.status(400).json({ error: 'toNumber, fromNumber, and audioUrl are required' });
