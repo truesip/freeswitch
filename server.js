@@ -2,6 +2,10 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { randomUUID } = require('crypto');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const express = require('express');
 const bodyParser = require('body-parser');
 const AriClient = require('ari-client');
@@ -10,6 +14,8 @@ const dotenv = require('dotenv');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
 const multer = require('multer');
+
+const execFileAsync = promisify(execFile);
 
 // Load env (standard .env, then fallback to the provided sample filename)
 dotenv.config();
@@ -313,6 +319,37 @@ function buildPublicAudioUrl(req, fileName) {
   return `${proto}://${host}/media/${encodeURIComponent(fileName)}`;
 }
 
+// Convert any incoming audio buffer to 8kHz, mono, 16-bit PCM WAV using ffmpeg.
+// If ffmpeg fails for any reason, fall back to the original buffer.
+async function convertTo8kMonoWav(buffer) {
+  const tmpDir = os.tmpdir();
+  const id = randomUUID();
+  const inPath = path.join(tmpDir, `audio_in_${id}`);
+  const outPath = path.join(tmpDir, `audio_out_${id}.wav`);
+
+  await fs.promises.writeFile(inPath, buffer);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', inPath,
+      '-ar', '8000',
+      '-ac', '1',
+      '-sample_fmt', 's16',
+      '-vn',
+      outPath
+    ]);
+    const converted = await fs.promises.readFile(outPath);
+    return converted;
+  } catch (err) {
+    console.error('Audio convert to 8kHz mono failed, using original buffer:', err.message || err);
+    return buffer;
+  } finally {
+    fs.promises.unlink(inPath).catch(() => {});
+    fs.promises.unlink(outPath).catch(() => {});
+  }
+}
+
 // Views
 const isApiRequest = (req) => req.path.startsWith('/api') || req.path === '/call';
 const parseCookies = (req) => {
@@ -458,12 +495,14 @@ app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, re
     const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
     const ext = path.extname(req.file.originalname || '') || '.wav';
     const fileName = `${safe}_${Date.now()}${ext}`;
-    const mimeType = req.file.mimetype || 'audio/wav';
+
+    const pcm8k = await convertTo8kMonoWav(req.file.buffer);
+    const mimeType = 'audio/wav';
 
     await pool.query('INSERT INTO audio_files (name, mime_type, data) VALUES (?, ?, ?)', [
       fileName,
       mimeType,
-      req.file.buffer
+      pcm8k
     ]);
 
     const publicUrl = buildPublicAudioUrl(req, fileName);

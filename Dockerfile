@@ -1,5 +1,9 @@
 FROM node:20-alpine
 WORKDIR /app
+
+# ffmpeg is used to normalize uploaded audio to 8kHz mono WAV
+RUN apk add --no-cache ffmpeg
+
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
