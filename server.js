@@ -49,18 +49,10 @@ const runtimeConfig = {
 if (!process.env.ARI_HOST) {
   console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
 }
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const base = (req.body?.name || file.originalname || 'audio').replace(/\.[^.]+$/, '');
-    const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
-    const ext = path.extname(file.originalname || '') || '.wav';
-    cb(null, `${safe}_${Date.now()}${ext}`);
-  }
-});
 
+// Multer in-memory storage; audio is persisted in MySQL (audio_files table)
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10 MB
 });
 
@@ -129,6 +121,17 @@ async function initDb() {
       if (e.code !== 'ER_DUP_FIELDNAME') console.warn('Schema alter warning:', e.message);
     }
   }
+
+  // Table to store uploaded audio blobs for HTTP playback
+  await pool.query(`CREATE TABLE IF NOT EXISTS audio_files (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(128) NOT NULL,
+    data LONGBLOB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audio_created_at (created_at),
+    UNIQUE KEY uniq_audio_name (name)
+  )`);
 }
 
 
@@ -295,19 +298,19 @@ async function sendWebhook(payload) {
 }
 
 
-// Store uploaded audio on this server and return a URL Asterisk can stream via HTTP.
+// Build public URL base for serving audio via /media/:name so Asterisk can stream it.
 // Prefer PUBLIC_BASE_URL when set (e.g. https://api.truesip.net) so URLs are
 // stable and use the correct scheme from Asterisk's point of view.
 function buildPublicAudioUrl(req, fileName) {
   const baseFromEnv = process.env.PUBLIC_BASE_URL && String(process.env.PUBLIC_BASE_URL).trim();
   if (baseFromEnv) {
     const base = baseFromEnv.replace(/\/$/, '');
-    return `${base}/uploads/${encodeURIComponent(fileName)}`;
+    return `${base}/media/${encodeURIComponent(fileName)}`;
   }
   const host = req.get('host');
   const forwardedProto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
   const proto = forwardedProto || req.protocol || 'http';
-  return `${proto}://${host}/uploads/${encodeURIComponent(fileName)}`;
+  return `${proto}://${host}/media/${encodeURIComponent(fileName)}`;
 }
 
 // Views
@@ -441,17 +444,29 @@ app.get('/api/stats', requireAuth, async (_req, res) => {
     last7: last7.map((r) => ({ day: r.day, count: r.cnt }))
   });
 });
-// API: audio upload/list/delete using HTTP-hosted files on this server
-// The uploaded file is stored under public/uploads and Asterisk streams it via
-// an absolute URL in the form sound:https://host/uploads/filename.wav
+// API: audio upload/list/delete using MySQL-backed blobs served via /media/:name
+// Uploaded audio is stored in the audio_files table and streamed over HTTP.
 app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
+    if (!pool) {
+      return res.status(503).json({ error: 'database not ready' });
+    }
     if (!req.file) {
       return res.status(400).json({ error: 'file is required (multipart/form-data field "file")' });
     }
-    const fileName = req.file.filename;
-    const publicUrl = buildPublicAudioUrl(req, fileName);
+    const base = (req.body?.name || req.file.originalname || 'audio').replace(/\.[^.]+$/, '');
+    const safe = base.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64) || 'audio';
+    const ext = path.extname(req.file.originalname || '') || '.wav';
+    const fileName = `${safe}_${Date.now()}${ext}`;
+    const mimeType = req.file.mimetype || 'audio/wav';
 
+    await pool.query('INSERT INTO audio_files (name, mime_type, data) VALUES (?, ?, ?)', [
+      fileName,
+      mimeType,
+      req.file.buffer
+    ]);
+
+    const publicUrl = buildPublicAudioUrl(req, fileName);
     res.json({ recordingName: fileName, playbackUri: `sound:${publicUrl}` });
   } catch (err) {
     console.error('Upload failed', err);
@@ -461,10 +476,13 @@ app.post('/api/audio/upload', requireAuth, upload.single('file'), async (req, re
 
 app.get('/api/audio', requireAuth, async (req, res) => {
   try {
-    const files = await fs.promises.readdir(uploadsDir);
-    const list = files.map((name) => ({
-      name,
-      playbackUri: `sound:${buildPublicAudioUrl(req, name)}`
+    if (!pool) return res.json([]);
+    const [rows] = await pool.query(
+      'SELECT name, mime_type, created_at FROM audio_files ORDER BY created_at DESC LIMIT 200'
+    );
+    const list = rows.map((row) => ({
+      name: row.name,
+      playbackUri: `sound:${buildPublicAudioUrl(req, row.name)}`
     }));
     res.json(list);
   } catch (err) {
@@ -475,20 +493,44 @@ app.get('/api/audio', requireAuth, async (req, res) => {
 
 app.delete('/api/audio/:name', requireAuth, async (req, res) => {
   try {
+    if (!pool) {
+      return res.status(503).json({ error: 'database not ready' });
+    }
     const name = req.params.name;
-    const filePath = path.join(uploadsDir, name);
-    await fs.promises.unlink(filePath);
-    res.json({ deleted: name });
-  } catch (err) {
-    if (err && err.code === 'ENOENT') {
+    const [result] = await pool.query('DELETE FROM audio_files WHERE name = ? LIMIT 1', [name]);
+    if (!result.affectedRows) {
       return res.status(404).json({ error: 'not found' });
     }
+    res.json({ deleted: name });
+  } catch (err) {
     console.error('Delete audio failed', err);
     res.status(500).json({ error: err.message || 'delete failed' });
   }
 });
 
 // API: recent calls (paginated)
+// Public media endpoint used by Asterisk to stream audio blobs
+app.get('/media/:name', async (req, res) => {
+  try {
+    if (!pool) return res.status(503).send('database not ready');
+    const name = req.params.name;
+    const [rows] = await pool.query(
+      'SELECT mime_type, data FROM audio_files WHERE name = ? LIMIT 1',
+      [name]
+    );
+    if (!rows || !rows.length) return res.status(404).send('not found');
+    const row = rows[0];
+    res.setHeader('Content-Type', row.mime_type || 'audio/wav');
+    if (row.data && row.data.length != null) {
+      res.setHeader('Content-Length', row.data.length);
+    }
+    res.send(row.data);
+  } catch (err) {
+    console.error('Media fetch failed', err);
+    res.status(500).send('media error');
+  }
+});
+
 app.get('/api/calls', requireAuth, async (req, res) => {
   if (!pool) return res.json({ data: [], total: 0, page: 1, limit: 10, pages: 0 });
   const limit = Math.min(Number(req.query.limit) || 10, 500);
