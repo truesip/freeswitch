@@ -278,8 +278,11 @@
 
             (list || []).forEach(function (item) {
               const name = item.name || item.recordingName || item.id || '';
-              // For Asterisk ARI stored recordings, playback URI is usually `recording:<name>`
-              const playbackUri = 'recording:' + name;
+              const playbackUri =
+                item.playbackUri ||
+                item.playback_url ||
+                (name ? 'recording:' + name : '');
+              if (!name || !playbackUri) return;
 
               const tr = document.createElement('tr');
 

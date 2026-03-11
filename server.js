@@ -286,9 +286,17 @@ async function sendWebhook(payload) {
 
 
 // Store uploaded audio on this server and return a URL Asterisk can stream via HTTP.
+// Prefer PUBLIC_BASE_URL when set (e.g. https://api.truesip.net) so URLs are
+// stable and use the correct scheme from Asterisk's point of view.
 function buildPublicAudioUrl(req, fileName) {
+  const baseFromEnv = process.env.PUBLIC_BASE_URL && String(process.env.PUBLIC_BASE_URL).trim();
+  if (baseFromEnv) {
+    const base = baseFromEnv.replace(/\/$/, '');
+    return `${base}/uploads/${encodeURIComponent(fileName)}`;
+  }
   const host = req.get('host');
-  const proto = req.protocol || 'http';
+  const forwardedProto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = forwardedProto || req.protocol || 'http';
   return `${proto}://${host}/uploads/${encodeURIComponent(fileName)}`;
 }
 
