@@ -149,7 +149,7 @@ async function connectAri() {
       fetchCallByUuid(uuid)
         .then((row) => sendWebhook({ event: 'answered', uuid, ...row, timestamp: now }))
         .catch(console.error);
-      const audio = chan.variables?.audio_url;
+      const audio = (event.args && event.args[0]) || chan?.variables?.audio_url;
       if (audio) {
         ari.channels.play(chan.id, { media: audio }).catch((err) => console.error('play error', err));
       }
@@ -287,6 +287,7 @@ app.post('/call', (req, res) => {
       endpoint,
       callerId: fromNumber,
       app: runtimeConfig.ariApp,
+      appArgs: audioUrl,
       variables: { audio_url: audioUrl }
     })
     .then(async (channel) => {
