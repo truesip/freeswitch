@@ -126,6 +126,5 @@ document.getElementById('calls-next')?.addEventListener('click', () => {
 });
 
 document.getElementById('logout-btn')?.addEventListener('click', () => {
-  // Drop apiKey by navigating without query; will hit 401 if API_KEY is enforced
-  window.location.href = '/admin';
+  window.location.href = '/logout';
 });
