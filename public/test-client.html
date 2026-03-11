@@ -151,10 +151,24 @@
       <div class="row">
         <label>
           Audio URL
-          <input id="audioUrl" type="text" placeholder="recording:... or sound:custom/custom8000" />
+          <input id="audioUrl" type="text" placeholder="recording:..., sound:custom/custom8000, or sound:https://.../media/..." />
         </label>
         <small>
-          You can pick from the recordings list below to auto-fill this field.
+          You can pick from the recordings list below or use the type selector to build this field.
+        </small>
+      </div>
+      <div class="row">
+        <label>
+          Audio type
+          <select id="audioType">
+            <option value="raw">Raw playback URI (use as-is)</option>
+            <option value="custom">Local sound (sound:custom/...)</option>
+            <option value="ari">ARI stored recording (recording:...)</option>
+          </select>
+        </label>
+        <small>
+          For "Local sound", enter e.g. <code>custom/custom8000</code> in the Audio URL box and it will be prefixed with
+          <code>sound:</code> when sending the call.
         </small>
       </div>
       <div class="row">
@@ -191,6 +205,7 @@
         const toNumberInput = document.getElementById('toNumber');
         const fromNumberInput = document.getElementById('fromNumber');
         const audioUrlInput = document.getElementById('audioUrl');
+        const audioTypeSelect = document.getElementById('audioType');
 
         function getBase() {
           const v = (baseInput.value || '').trim();
@@ -342,13 +357,32 @@
         recordingSelect.addEventListener('change', function () {
           if (this.value) {
             audioUrlInput.value = this.value;
+            audioTypeSelect.value = 'raw';
           }
         });
+
+        function buildAudioUrl() {
+          const raw = audioUrlInput.value.trim();
+          const type = audioTypeSelect.value;
+          if (!raw) return '';
+          if (type === 'custom') {
+            if (raw.startsWith('sound:')) return raw;
+            const path = raw.replace(/^sound:/, '');
+            return 'sound:' + path;
+          }
+          if (type === 'ari') {
+            if (raw.startsWith('recording:')) return raw;
+            const name = raw.replace(/^recording:/, '');
+            return 'recording:' + name;
+          }
+          // raw
+          return raw;
+        }
 
         async function placeCall() {
           const toNumber = toNumberInput.value.trim();
           const fromNumber = fromNumberInput.value.trim();
-          const audioUrl = audioUrlInput.value.trim();
+          const audioUrl = buildAudioUrl();
 
           if (!toNumber || !fromNumber || !audioUrl) {
             setStatus(callStatus, 'toNumber, fromNumber, and audioUrl are required.', true);

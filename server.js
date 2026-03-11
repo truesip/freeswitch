@@ -14,6 +14,8 @@ const dotenv = require('dotenv');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +40,7 @@ const app = express();
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.disable('x-powered-by');
+app.use(helmet());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.json());
 
@@ -50,8 +53,17 @@ const runtimeConfig = {
   dialPrefix: process.env.PJSIP_PREFIX || 'PJSIP/',
   webhookUrl: process.env.WEBHOOK_URL || '',
   port: Number(process.env.PORT || 8080),
-  apiKey: process.env.API_KEY || ''
+  apiKey: process.env.API_KEY || '',
+  apiKeys: []
 };
+runtimeConfig.apiKeys = (
+  process.env.API_KEYS
+    ? String(process.env.API_KEYS)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
+).concat(runtimeConfig.apiKey ? [runtimeConfig.apiKey] : []);
 if (!process.env.ARI_HOST) {
   console.warn('Warning: ARI_HOST not set; defaulting to 127.0.0.1:8088 (likely to fail in production).');
 }
@@ -200,7 +212,25 @@ async function connectAri() {
         .answer({ channelId })
         .catch((err) => console.error('answer error', err?.message || err));
       fetchCallByUuid(uuid)
-        .then((row) => sendWebhook({ event: 'answered', uuid, ...row, timestamp: now }))
+        .then((row) => {
+          if (!row) return;
+          const payload = {
+            event: 'answered',
+            uuid,
+            toNumber: row.toNumber,
+            fromNumber: row.fromNumber,
+            jobId: row.jobId,
+            audioUrl: row.audioUrl,
+            status: row.status,
+            durationSec: row.duration_sec ?? null,
+            amdStatus: row.amd_status ?? null,
+            ringTime: row.ring_time || null,
+            answerTime: row.answer_time || now,
+            hangupTime: row.hangup_time || null,
+            timestamp: now
+          };
+          sendWebhook(payload);
+        })
         .catch(console.error);
       const audio = (event.args && event.args[0]) || chan?.variables?.audio_url;
       if (audio) {
@@ -224,7 +254,25 @@ async function connectAri() {
         callCache.set(chan.id, { ...(callCache.get(chan.id) || {}), ring: now });
         updateCallStatus(chan.id, { status: 'ringing', ring_time: now }).catch(console.error);
         fetchCallByUuid(chan.id)
-          .then((row) => sendWebhook({ event: 'ringing', uuid: chan.id, ...row, timestamp: now }))
+          .then((row) => {
+            if (!row) return;
+            const payload = {
+              event: 'ringing',
+              uuid: chan.id,
+              toNumber: row.toNumber,
+              fromNumber: row.fromNumber,
+              jobId: row.jobId,
+              audioUrl: row.audioUrl,
+              status: row.status,
+              durationSec: row.duration_sec ?? null,
+              amdStatus: row.amd_status ?? null,
+              ringTime: row.ring_time || now,
+              answerTime: row.answer_time || null,
+              hangupTime: row.hangup_time || null,
+              timestamp: now
+            };
+            sendWebhook(payload);
+          })
           .catch(console.error);
       }
     });
@@ -237,9 +285,24 @@ async function connectAri() {
         cache.answer && now ? Math.max(0, Math.round((now.getTime() - cache.answer.getTime()) / 1000)) : null;
       updateCallStatus(chan.id, { status: 'hangup', hangup_time: now, duration_sec: duration }).catch(console.error);
       fetchCallByUuid(chan.id)
-        .then((row) =>
-          sendWebhook({ event: 'hangup', uuid: chan.id, duration, amdStatus: row?.amd_status, ...row, timestamp: now })
-        )
+        .then((row) => {
+          const payload = {
+            event: 'hangup',
+            uuid: chan.id,
+            toNumber: row?.toNumber,
+            fromNumber: row?.fromNumber,
+            jobId: row?.jobId,
+            audioUrl: row?.audioUrl,
+            status: row?.status,
+            durationSec: duration ?? row?.duration_sec ?? null,
+            amdStatus: row?.amd_status ?? null,
+            ringTime: row?.ring_time || (cache.ring || null),
+            answerTime: row?.answer_time || (cache.answer || null),
+            hangupTime: row?.hangup_time || now,
+            timestamp: now
+          };
+          sendWebhook(payload);
+        })
         .catch(console.error);
       callCache.delete(chan.id);
     });
@@ -367,12 +430,12 @@ const isAuthed = (req) => {
   const queryKey = req.query.apiKey || req.query.api_key;
   const cookies = parseCookies(req);
   const cookieKey = cookies.apiKey;
-  const hasApiKey =
-    runtimeConfig.apiKey &&
-    (headerKey === runtimeConfig.apiKey || bearer === runtimeConfig.apiKey || queryKey === runtimeConfig.apiKey || cookieKey === runtimeConfig.apiKey);
+  const keys = runtimeConfig.apiKeys || [];
+  const provided = [headerKey, bearer, queryKey, cookieKey].filter(Boolean);
+  const hasApiKey = keys.length && provided.some((k) => keys.includes(k));
   const hasSession = !!req.session?.auth;
   if (isApiRequest(req)) {
-    return hasSession || hasApiKey || (!runtimeConfig.apiKey && !process.env.ADMIN_USER); // allow open API only when no api key configured
+    return hasSession || hasApiKey || (!keys.length && !process.env.ADMIN_USER); // allow open API only when no api key configured
   }
   return hasSession; // UI requires session login
 };
@@ -383,7 +446,7 @@ const requireAuth = (req, res, next) => {
 };
 
 app.get('/login', (_req, res) => {
-  const apiKeySet = !!runtimeConfig.apiKey;
+  const apiKeySet = !!(runtimeConfig.apiKeys && runtimeConfig.apiKeys.length);
   res.render('login', { error: null, apiKeySet });
 });
 
@@ -409,6 +472,18 @@ app.get('/logout', (_req, res) => {
 
 app.get('/', requireAuth, (_req, res) => res.redirect('/admin'));
 app.get('/admin', requireAuth, (_req, res) => res.render('dashboard'));
+
+// Basic rate limiting for API and call endpoints
+const windowMs = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000); // default 1 minute
+const maxReqs = Number(process.env.RATE_LIMIT_MAX || 60); // default 60 reqs/min per IP
+const apiLimiter = rateLimit({
+  windowMs,
+  max: maxReqs,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/call', apiLimiter);
+app.use('/api', apiLimiter);
 
 // API: place call
 app.post('/call', requireAuth, (req, res) => {
