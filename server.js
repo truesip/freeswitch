@@ -319,6 +319,21 @@ async function connectAri() {
   }
 }
 
+function handleUnexpectedError(err) {
+  const msg = err && (err.stack || err.message || String(err));
+  console.error('Unhandled error:', msg);
+  if (msg && msg.includes("Can't read swagger JSON")) {
+    console.error('ARI swagger JSON load failed; will retry connect in 3s');
+    setTimeout(connectAri, 3000);
+  }
+}
+
+process.on('uncaughtException', handleUnexpectedError);
+process.on('unhandledRejection', (reason) => {
+  if (reason instanceof Error) return handleUnexpectedError(reason);
+  handleUnexpectedError(new Error(String(reason)));
+});
+
 connectAri();
 initDb().catch((err) => console.error('DB init failed', err));
 
