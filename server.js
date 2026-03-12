@@ -374,13 +374,19 @@ async function fetchCallByUuid(uuid) {
 async function sendWebhook(payload) {
   if (!runtimeConfig.webhookUrl) return;
   try {
+    console.log('Sending webhook', {
+      url: runtimeConfig.webhookUrl,
+      event: payload?.event,
+      uuid: payload?.uuid,
+      status: payload?.status
+    });
     await fetch(runtimeConfig.webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
   } catch (err) {
-    console.error('Webhook send failed', err.message);
+    console.error('Webhook send failed', err.message || err);
   }
 }
 
