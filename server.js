@@ -543,8 +543,15 @@ app.get('/api/stats', requireAuth, async (_req, res) => {
       SUM(CASE WHEN DATE(created_at)=CURDATE() THEN 1 ELSE 0 END) as today
     FROM call_logs`
   );
+  // Approximate concurrent calls as any call whose active interval overlaps the
+  // last 120 seconds window. We treat the call's active interval as
+  // [COALESCE(answer_time, ring_time, created_at), COALESCE(hangup_time, NOW())].
+  // If that interval intersects [NOW() - 120s, NOW()], we count it.
   const [concurrentRows] = await pool.query(
-    `SELECT COUNT(*) as concurrent FROM call_logs WHERE status='placed' AND created_at >= (NOW() - INTERVAL 120 SECOND)`
+    `SELECT COUNT(*) AS concurrent
+       FROM call_logs
+      WHERE COALESCE(answer_time, ring_time, created_at) < NOW()
+        AND COALESCE(hangup_time, NOW()) > (NOW() - INTERVAL 120 SECOND)`
   );
   const [last7] = await pool.query(
     `SELECT DATE(created_at) as day, COUNT(*) as cnt
